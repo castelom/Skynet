@@ -7,6 +7,7 @@ from dh import create_dh_key, calculate_dh_secret
 class StealthConn(object):
     def __init__(self, conn, client=False, server=False, verbose=False):
         self.conn = conn
+        self.iv = 0
         self.cipher = None
         self.client = client
         self.server = server
