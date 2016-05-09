@@ -16,7 +16,7 @@ def p2p_echo():
         sconn = find_bot()
         # Set verbose to true so we can view the encoded packets
         sconn.verbose = True
-        sconn.send(bytes("ECHO", "ascii"))
+        sconn.send(bytes("ECHO TEST 123456", "ascii"))
         while 1:
             # Read a message and send it to the other bot
             msg = input("Echo> ")

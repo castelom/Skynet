@@ -41,7 +41,7 @@ def accept_connection(conn):
         sconn = StealthConn(conn, server=True)
         # The sender is either going to chat to us or send a file
         cmd = sconn.recv()
-        if cmd == b'ECHO':
+        if cmd == b'ECHO TEST 123456':
             echo_server(sconn)
         elif cmd == b'FILE':
             p2p_download_file(sconn)
