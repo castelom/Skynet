@@ -10,6 +10,7 @@ class StealthConn(object):
     def __init__(self, conn, client=False, server=False, verbose=True):
         self.conn = conn
         self.iv = 0
+        self.enc = False
         self.shared_key = 0
         self.cipher = None
         self.client = client
@@ -33,12 +34,15 @@ class StealthConn(object):
             print("Shared hash: {}".format(self.shared_key))
 
         # Default XOR algorithm can only take a key of length 32
-
-        self.cipher = AES.new(self.shared_key[:32], AES.MODE_CBC, self.shared_key[:16])
+        self.enc = True
 
     def send(self, data):
-        if self.cipher:
-            encrypted_data =  self.cipher.encrypt(data)
+        if self.enc:
+            #Generate a new cipher with a new iv every time
+            self.iv = bytes(str(Random.new().read( AES.block_size)), "ascii")[:16]
+            self.cipher = AES.new(self.shared_key[:32], AES.MODE_CBC, self.iv)
+            encrypted_data = self.iv + self.cipher.encrypt(data)
+            print("Iv sent: {}".format(self.iv))
             if self.verbose:
                 print("Original data: {}".format(data))
                 print("Encrypted data: {}".format(repr(encrypted_data)))
@@ -60,11 +64,11 @@ class StealthConn(object):
 
         encrypted_data = self.conn.recv(pkt_len)
         #print("Encrypted data: {}".format(repr(encrypted_data)))
-        if self.cipher:
-            
-            #iv = encrypted_data[:16]
-            #self.cipher = AES.new(self.shared_key[:32],AES.MODE_CBC,iv)
-            data = self.cipher.decrypt(encrypted_data)
+        if self.enc:
+            iv = encrypted_data[:16]
+            print("Iv received: {}".format(iv))
+            self.cipher = AES.new(self.shared_key[:32],AES.MODE_CBC,iv)
+            data = self.cipher.decrypt(encrypted_data[16:])
             #data = encrypted_data
             if self.verbose:
                 print("Receiving packet of length {}".format(pkt_len))
