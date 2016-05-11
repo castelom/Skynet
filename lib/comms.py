@@ -1,9 +1,10 @@
 import struct
 
 from Crypto.Cipher import AES
+from Crypto.Cipher import DES
 from Crypto.Cipher import XOR
 from Crypto import Random
-
+from lib.crypto_utils import ANSI_X923_pad, ANSI_X923_unpad
 from dh import create_dh_key, calculate_dh_secret
 
 class StealthConn(object):
@@ -39,9 +40,11 @@ class StealthConn(object):
     def send(self, data):
         if self.enc:
             #Generate a new cipher with a new iv every time
+            data_pad = ANSI_X923_pad(data, AES.block_size)
             self.iv = bytes(str(Random.new().read( AES.block_size)), "ascii")[:16]
             self.cipher = AES.new(self.shared_key[:32], AES.MODE_CBC, self.iv)
-            encrypted_data = self.iv + self.cipher.encrypt(data)
+            ciphertext_pad = self.cipher.encrypt(data_pad)
+            encrypted_data = self.iv + ciphertext_pad
             print("Iv sent: {}".format(self.iv))
             if self.verbose:
                 print("Original data: {}".format(data))
@@ -66,20 +69,22 @@ class StealthConn(object):
         #print("Encrypted data: {}".format(repr(encrypted_data)))
         if self.enc:
             iv = encrypted_data[:16]
+            ciphertext_pad = encrypted_data[16:]
             print("Iv received: {}".format(iv))
             self.cipher = AES.new(self.shared_key[:32],AES.MODE_CBC,iv)
-            data = self.cipher.decrypt(encrypted_data[16:])
+            plaintext_pad = self.cipher.decrypt(ciphertext_pad)
+            plaintext = ANSI_X923_unpad(plaintext_pad, DES.block_size)
             #data = encrypted_data
             if self.verbose:
                 print("Receiving packet of length {}".format(pkt_len))
                 print("Encrypted data: {}".format(repr(encrypted_data)))
-                print("Original data: {}".format(data))
+                print("Original data: {}".format(plaintext))
         else:
-            data = encrypted_data
+            plaintext = encrypted_data
             
                
 
-        return data
+        return plaintext
 
     def close(self):
         self.conn.close()
