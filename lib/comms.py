@@ -3,6 +3,7 @@ import struct
 from Crypto.Cipher import AES
 from Crypto.Cipher import DES
 from Crypto.Cipher import XOR
+from Crypto.Hash import HMAC
 from Crypto import Random
 from lib.crypto_utils import ANSI_X923_pad, ANSI_X923_unpad
 from dh import create_dh_key, calculate_dh_secret
@@ -34,22 +35,33 @@ class StealthConn(object):
             self.shared_key = calculate_dh_secret(their_public_key, my_private_key)
             print("Shared hash: {}".format(self.shared_key))
 
-        # Default XOR algorithm can only take a key of length 32
+        # Enables encryption
         self.enc = True
 
     def send(self, data):
         if self.enc:
-            #Generate a new cipher with a new iv every time
+            #Convert shared_key to bytes
+            #key = bytes(self.shared_key[:32],"ascii")
+            hmac = HMAC.new(self.shared_key[:32],data).digest()
+            #Padding the message
             data_pad = ANSI_X923_pad(data, AES.block_size)
-            self.iv = bytes(str(Random.new().read( AES.block_size)), "ascii")[:16]
-            self.cipher = AES.new(self.shared_key[:32], AES.MODE_CBC, self.iv)
+            
+            #Generate a iv and create a new cipher for each msg
+            iv = bytes(str(Random.new().read( AES.block_size)), "ascii")[:16]
+            self.cipher = AES.new(self.shared_key[:32], AES.MODE_CBC, iv)
+
+            #Encrypt the message
             ciphertext_pad = self.cipher.encrypt(data_pad)
-            encrypted_data = self.iv + ciphertext_pad
-            print("Iv sent: {}".format(self.iv))
+
+            #Concatenate the iv and ciphertext
+            encrypted_data = iv + hmac + ciphertext_pad
+            
             if self.verbose:
+                print("-------------------------------Sending-------------------------------")
                 print("Original data: {}".format(data))
                 print("Encrypted data: {}".format(repr(encrypted_data)))
                 print("Sending packet of length {}".format(len(encrypted_data)))
+                print("--------------------------------Sent---------------------------------")
         else:
             encrypted_data = data
 
@@ -68,17 +80,38 @@ class StealthConn(object):
         encrypted_data = self.conn.recv(pkt_len)
         #print("Encrypted data: {}".format(repr(encrypted_data)))
         if self.enc:
+            # The first 16 bytes of message is the iv
             iv = encrypted_data[:16]
-            ciphertext_pad = encrypted_data[16:]
-            print("Iv received: {}".format(iv))
+
+            #HMAC
+            rec_hmac = encrypted_data[16:32]
+            #ciphertext is the message after 16 bytes
+            ciphertext_pad = encrypted_data[32:]
+
+            #Generate a new cipher for decryption
             self.cipher = AES.new(self.shared_key[:32],AES.MODE_CBC,iv)
+
+            #Decrypt text
             plaintext_pad = self.cipher.decrypt(ciphertext_pad)
+
+            #Unpad plaintext
             plaintext = ANSI_X923_unpad(plaintext_pad, DES.block_size)
-            #data = encrypted_data
+
+            #Comparing HMAC 
+            hmac = HMAC.new(self.shared_key[:32],plaintext).digest()
+            print("-------------------------------Checking integrity-------------------------------")
+            if(rec_hmac == hmac):
+                print("Message was not modified")
+            else:
+                print("Message was modified be careful")
+            print("------------------------------Integrity Checked--------------------------------")
+            
             if self.verbose:
+                print("------------------------------Decrypting data-------------------------------")
                 print("Receiving packet of length {}".format(pkt_len))
                 print("Encrypted data: {}".format(repr(encrypted_data)))
                 print("Original data: {}".format(plaintext))
+                print("-------------------------------Data Decrypted--------------------------------")
         else:
             plaintext = encrypted_data
             
