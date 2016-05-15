@@ -1,24 +1,26 @@
 import struct
-
-from Crypto.Cipher import AES
-from Crypto.Cipher import DES
-from Crypto.Cipher import XOR
-from Crypto.Hash import HMAC
+from base64 import b64encode, b64decode
 from Crypto import Random
-from lib.crypto_utils import ANSI_X923_pad, ANSI_X923_unpad
+from Crypto.Cipher import XOR, AES
+from Crypto.Hash import HMAC
+from Crypto.Hash import SHA256
+from lib.crypto_utils import ANSI_X923_pad, ANSI_X923_unpad, AES256_CBC_Encrypt, AES256_CBC_Decrypt 
 from dh import create_dh_key, calculate_dh_secret
 
 class StealthConn(object):
     def __init__(self, conn, client=False, server=False, verbose=True):
         self.conn = conn
-        self.iv = 0
         self.enc = False
         self.shared_key = 0
-        self.cipher = None
         self.client = client
         self.server = server
         self.verbose = verbose
         self.initiate_session()
+        self.last_token = 0
+        self.current_token = 0
+        self.session_token = 0
+        self.token_send = 0
+        self.token_recv = 0
 
     def initiate_session(self):
         # Perform the initial connection handshake for agreeing on a shared secret
@@ -40,25 +42,24 @@ class StealthConn(object):
 
     def send(self, data):
         if self.enc:
-            #Convert shared_key to bytes
-            #key = bytes(self.shared_key[:32],"ascii")
-            hmac = HMAC.new(self.shared_key[:32],data).digest()
-            #Padding the message
-            data_pad = ANSI_X923_pad(data, AES.block_size)
-            
-            #Generate a iv and create a new cipher for each msg
-            iv = bytes(str(Random.new().read( AES.block_size)), "ascii")[:16]
-            self.cipher = AES.new(self.shared_key[:32], AES.MODE_CBC, iv)
+            #Creating session_token
+            self.token_send += len(data)
 
-            #Encrypt the message
-            ciphertext_pad = self.cipher.encrypt(data_pad)
+            #Appending session token in data
+            data = b64encode(self.token_send.to_bytes(4, 'little')) + data
+            #Return ciphertext and iv used to encrypt it.
+            ciphertext_pad,iv = AES256_CBC_Encrypt(self.shared_key[:32],data)
 
-            #Concatenate the iv and ciphertext
-            encrypted_data = iv + hmac + ciphertext_pad
+            #Creating HMAC
+            hmac = HMAC.new(self.shared_key[:32],digestmod=SHA256)
+            hmac.update(ciphertext_pad)
+             
+            #Concatenate the iv hmac and ciphertext
+            encrypted_data = iv + bytes(hmac.hexdigest(),"ascii") + ciphertext_pad
             
             if self.verbose:
                 print("-------------------------------Sending-------------------------------")
-                print("Original data: {}".format(data))
+                print("Original data: {}".format(data[8:]))
                 print("Encrypted data: {}".format(repr(encrypted_data)))
                 print("Sending packet of length {}".format(len(encrypted_data)))
                 print("--------------------------------Sent---------------------------------")
@@ -80,38 +81,56 @@ class StealthConn(object):
         encrypted_data = self.conn.recv(pkt_len)
         #print("Encrypted data: {}".format(repr(encrypted_data)))
         if self.enc:
+            
             # The first 16 bytes of message is the iv
             iv = encrypted_data[:16]
 
-            #HMAC
-            rec_hmac = encrypted_data[16:32]
-            #ciphertext is the message after 16 bytes
-            ciphertext_pad = encrypted_data[32:]
+            #HMAC 64 bytes
+            rec_hmac = encrypted_data[16:80]
 
-            #Generate a new cipher for decryption
-            self.cipher = AES.new(self.shared_key[:32],AES.MODE_CBC,iv)
-
-            #Decrypt text
-            plaintext_pad = self.cipher.decrypt(ciphertext_pad)
-
-            #Unpad plaintext
-            plaintext = ANSI_X923_unpad(plaintext_pad, DES.block_size)
+            #Data
+            ciphertext = encrypted_data[80:]
 
             #Comparing HMAC 
-            hmac = HMAC.new(self.shared_key[:32],plaintext).digest()
+            hmac = HMAC.new(self.shared_key[:32],digestmod=SHA256)
+            hmac.update(ciphertext) 
+            hmac = bytes(hmac.hexdigest(),"ascii")
+            
+            
             print("-------------------------------Checking integrity-------------------------------")
             if(rec_hmac == hmac):
                 print("Message was not modified")
+               
             else:
-                print("Message was modified be careful")
+                print("Message was modified and discarted")
             print("------------------------------Integrity Checked--------------------------------")
+                
+            #Decrypt text
+            plaintext = AES256_CBC_Decrypt(self.shared_key[:32], iv, ciphertext)
+
+            #Look session id
+            token_recv = int.from_bytes(b64decode(plaintext[:8]), 'little')
             
+            #Separates id and plaintext
+            plaintext = plaintext[8:]
+            
+            #Computing session id
+            self.token_recv += len(plaintext)
+
+            print("-------------------------------Checking session-------------------------------")
+            if self.token_recv == token_recv:
+                print("Valid session token")
+            else:
+                print("Invalid session token be careful replay attack")
+            print("-------------------------------Session checked--------------------------------")
+
             if self.verbose:
                 print("------------------------------Decrypting data-------------------------------")
                 print("Receiving packet of length {}".format(pkt_len))
                 print("Encrypted data: {}".format(repr(encrypted_data)))
                 print("Original data: {}".format(plaintext))
                 print("-------------------------------Data Decrypted--------------------------------")
+    
         else:
             plaintext = encrypted_data
             
