@@ -6,6 +6,7 @@ from Crypto.Hash import HMAC
 from Crypto.Hash import SHA256
 from lib.crypto_utils import ANSI_X923_pad, ANSI_X923_unpad, AES256_CBC_Encrypt, AES256_CBC_Decrypt 
 from dh import create_dh_key, calculate_dh_secret
+from Crypto.Random.Fortuna import FortunaGenerator
 
 class StealthConn(object):
     def __init__(self, conn, client=False, server=False, verbose=True):
@@ -22,6 +23,16 @@ class StealthConn(object):
         self.token_send = 0
         self.token_recv = 0
 
+        self.hashed_hmac_key 
+        self.hashed_AES_key
+
+        # PRNG used to generate unique IDs for each message sent
+        self.send_prng = None
+        # PRNG used to generate the expected ID for a received message
+        self.recv_prng = None
+
+        
+
     def initiate_session(self):
         # Perform the initial connection handshake for agreeing on a shared secret
 
@@ -37,7 +48,11 @@ class StealthConn(object):
             self.shared_key = calculate_dh_secret(their_public_key, my_private_key)
             print("Shared hash: {}".format(self.shared_key))
 
-        # Enables encryption
+            self.generate_keys(self.shared_key)
+            print("Shared AES  key: {}".format(self.hashed_AES_key))
+            print("Shared HMAC key: {}".format(self.hashed_hmac_key))
+
+        #Enables encryption
         self.enc = True
 
     def send(self, data):
@@ -48,10 +63,10 @@ class StealthConn(object):
             #Appending session token in data
             data = b64encode(self.token_send.to_bytes(4, 'little')) + data
             #Return ciphertext and iv used to encrypt it.
-            ciphertext_pad,iv = AES256_CBC_Encrypt(self.shared_key[:32],data)
+            ciphertext_pad,iv = AES256_CBC_Encrypt(self.hashed_AES_key[:32],data)
 
             #Creating HMAC
-            hmac = HMAC.new(self.shared_key[:32],digestmod=SHA256)
+            hmac = HMAC.new(self.hashed_hmac_key[:32],digestmod=SHA256)
             hmac.update(ciphertext_pad)
              
             #Concatenate the iv hmac and ciphertext
@@ -92,7 +107,7 @@ class StealthConn(object):
             ciphertext = encrypted_data[80:]
 
             #Comparing HMAC 
-            hmac = HMAC.new(self.shared_key[:32],digestmod=SHA256)
+            hmac = HMAC.new(self.hashed_hmac_key[:32],digestmod=SHA256)
             hmac.update(ciphertext) 
             hmac = bytes(hmac.hexdigest(),"ascii")
             
@@ -106,7 +121,7 @@ class StealthConn(object):
             print("------------------------------Integrity Checked--------------------------------")
                 
             #Decrypt text
-            plaintext = AES256_CBC_Decrypt(self.shared_key[:32], iv, ciphertext)
+            plaintext = AES256_CBC_Decrypt(self.hashed_AES_key[:32], iv, ciphertext)
 
             #Look session id
             token_recv = int.from_bytes(b64decode(plaintext[:8]), 'little')
@@ -137,6 +152,20 @@ class StealthConn(object):
                
 
         return plaintext
+
+    def generate_keys(self, seed):
+        # Randomly generate keys for AES and HMAC
+
+        # Create and seed the PRNG
+        prng = FortunaGenerator.AESGenerator()
+        prng.reseed(seed)
+
+        # Randomly generate a 512-bit key for AES (I don't know why)
+        AES_key = prng.pseudo_random_data(32)
+        self.hashed_AES_key = bytes(SHA256.new(AES_key).hexdigest(), "ascii")
+        # Randomly generate a 512-bit key for HMAC
+        hmac_key = prng.pseudo_random_data(32)
+        self.hashed_hmac_key = bytes(SHA256.new(hmac_key).hexdigest(), "ascii")
 
     def close(self):
         self.conn.close()
